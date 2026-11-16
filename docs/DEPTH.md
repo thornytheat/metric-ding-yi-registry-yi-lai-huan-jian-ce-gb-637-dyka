@@ -1,6 +1,6 @@
 # 深度登记 metricreg（指标定义注册与依赖环检测）
 
-- 规模：中型（7 个功能模块 / 7 个页面 / 81 个文件 / 101 条测试）
+- 规模：中型（8 个功能模块 / 8 个页面 / 90 个文件 / 116 条测试）
 - 核心规则一：**DSL 解析与登记**——一行一条 `name = expr [where …] [group by …] [depends: …]`，先做全角归一，再词法/语法分析；结构扫描与语法解析两条独立路径，检出项按固定优先级排序，规则书写顺序不影响结论。
 - 核心规则二：**依赖成环检测**——按指标→指标边建图，用显式栈迭代 Tarjan 求强连通分量；分量大小 >1 或单点自环即判环，给出环路路径；同名指标按聚合/过滤/分组差异分三级冲突，保留行号最小的一条。
 - 核心规则三：**下线与迁移次序**——环按分量计数（一个环只出一条，TRAP-27），单点只有自环才算环（孤立指标不进环，TRAP-28）；迁移次序按「依赖方先迁、被依赖方后下线」做确定性 Kahn 排序，环内指标进阻断表；同名指标按评估日生效版本说清下的是哪一版。
@@ -17,6 +17,7 @@
 | M5 版本区间与批次 | 查版本台账、提交新版、拒绝陈旧提交、看批次历史 | GET /api/versions、POST /api/versions/submit、GET /api/batches、页面 /versions | `app/modules/m5_versions/intervals.py` `app/modules/m5_versions/stale.py` `app/modules/m5_versions/batches.py` | `tests/test_versions.py` |
 | M6 影响面与导出 | 算影响分、核四账、导出指标/边/冲突/清单 | GET /api/impact、GET /api/reconcile、GET /api/export/*、页面 /impact | `app/modules/m6_impact/impact.py` `app/modules/m6_impact/export_out.py` `app/modules/m6_impact/json_out.py` | `tests/test_impact.py` |
 | M7 下线影响 | 选下线指标，看受影响面、迁移次序与阻断项，导出清单 | GET /api/retire、POST /api/retire、GET /api/retire/order.csv、页面 /retire | `app/modules/m7_retire/cycles.py` `app/modules/m7_retire/order.py` `app/modules/m7_retire/plan.py` `app/modules/m7_retire/service.py` | `tests/test_retire.py` `tests/test_retire_cycles.py` `tests/test_retire_versions.py` |
+| M8 关系治理 | 发布双源关系，看审批/真实引用两张证据表、隐藏环，整版切现网图/环检测/下线判断，失败续跑 | POST /api/publish、GET /api/publish、GET /api/relations、GET /api/retire/governed、页面 /dependencies | `app/modules/m8_govern/engine.py` `app/modules/m8_govern/approvals.py` `app/modules/m8_govern/publish.py` `app/modules/m8_govern/view.py` `app/modules/m8_govern/retire_judge.py` | `tests/test_govern.py` |
 
 端到端：`tests/test_e2e.py`（样例 → 接入 → 诊断 → 图 → 版本 → 影响面 → 导出，含 4xx 失败输入与幂等重跑）；
 下线计划走同一批次数据：`tests/test_retire.py`（环最小化、阻断项、版本含义、接口与页面）。
@@ -37,6 +38,9 @@
 | TRAP-26 | 两个组同时改同一指标，后提交的版本号更小 | 后提交无条件覆盖，先改的被静默丢掉 | 版本号必须大于库中最新值，否则 409 `V_STALE_SUBMIT` | `app/modules/m5_versions/stale.py` | `tests/test_versions.py::test_stale_submit_rejected` |
 | TRAP-27 | 同一环按起点轮转被重复计为多个环 | 环内每个成员各报一次，3 元环报 3 个环，环数虚高 | 环键取成员集合摘要，一个强连通分量只出一个环；轮转次数单列成对照 | `app/modules/m7_retire/cycles.py` | `tests/test_retire.py::test_ring_count_is_one_per_component` |
 | TRAP-28 | 孤立指标被误判为环 | 单点分量一律当环，21 个没有依赖边的指标全进阻断表 | 单点只有自环才算环；孤立指标单列，不进迁移次序 | `app/modules/m7_retire/order.py` | `tests/test_retire.py::test_isolated_nodes_are_not_rings` |
+| TRAP-29 | 审批通过的依赖与表达式真实引用不一致，未申报引用把环藏起来 | 只按审批边建图，缺边的环在现网图里看不见，下线误放行 | 审批/真实引用两套关系分账：审批决定下线许可不自动放行，真实引用图单独求环并与审批图比对出隐藏环 | `app/modules/m8_govern/engine.py` | `tests/test_govern.py::test_reference_graph_finds_hidden_cycles_absent_in_approval_graph` |
+| TRAP-30 | 已停用的审批项仍被表达式引用 | 停用即删边，许可变化无据可查，或按真实引用自动放行 | 停用关系保留为证据（disabled 不入现网图），下线判断给 R_DEP_APPROVAL_DISABLED 收回许可 | `app/modules/m8_govern/retire_judge.py` | `tests/test_govern.py::test_retire_blocks_disabled_approval` |
+| TRAP-31 | 发布失败后重跑整批，关系被重复插入 | 重试再走一遍全流程，同一对关系写出多条 | 六校验点记录 checkpoint 续跑，关系按 (batch_id, relation_id) 唯一键幂等写，重试不新增重复关系 | `app/modules/m8_govern/publish.py` `app/store.py` | `tests/test_govern.py::test_retry_does_not_add_duplicate_relations` |
 
 ## 四账
 
@@ -64,3 +68,6 @@
 - M7 只出计划不改数据：不写回注册表、不自动改报表，迁移清单导出 CSV 交人工执行。
 - 迁移次序按指标→指标边排，不细分报表内部的字段级改动；报表只作为受影响清单出现。
 - 下线请求台账只认 metric/reason/owner/requested_on 四列，不校验申请人与审批状态。
+- M8 审批状态只分 active/disabled 两态，不做多级审批流；审批台账是独立 CSV，不回写 DSL。
+- M8 与 M1–M7 并存：M8 只写 relations / publish_runs / publish_checkpoints 三张表，
+  不改 M1 的 edges/components，老页面与老下线口径保持原行为。

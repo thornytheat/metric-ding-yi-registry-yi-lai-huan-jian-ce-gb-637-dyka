@@ -1,0 +1,9 @@
+metric,depends_on,status,approver,approved_on,source_version,note
+毛利率,毛利额,active,chenz,2026-09-01,APV-2026-09/v1,常规衍生口径审批
+毛利率,销售额,disabled,chenz,2026-09-20,APV-2026-09/v2,口径调整后该审批停用但表达式仍在引用
+净增量,基期销售额,active,zhaoy,2026-10-02,APV-2026-10/v1,只审批了单向，反向引用未申报
+动销率,库存深度,active,wangq,2026-10-05,APV-2026-10/v1,三元环只批了两条边
+库存深度,周转天数,active,wangq,2026-10-05,APV-2026-10/v1,三元环只批了两条边
+库存深度,销售额,active,wangq,2026-10-06,APV-2026-10/v2,基础口径引用已审批
+声明多余,销售额,active,chenz,2026-10-08,APV-2026-10/v3,审批有效但表达式已不再引用
+悬空引用,已下线指标,active,zhaoy,2026-08-15,APV-2026-08/v1,被引用指标已下线未注册

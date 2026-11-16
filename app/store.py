@@ -69,6 +69,27 @@ CREATE TABLE IF NOT EXISTS totals (
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS relations (
+    batch_id TEXT NOT NULL, relation_id TEXT NOT NULL, kind TEXT NOT NULL,
+    src TEXT NOT NULL, dst TEXT NOT NULL, status TEXT NOT NULL,
+    source_version TEXT NOT NULL, line_no INTEGER,
+    known_src INTEGER NOT NULL DEFAULT 1, known_dst INTEGER NOT NULL DEFAULT 1,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    matched_ref TEXT NOT NULL DEFAULT '', matched_appr TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (batch_id, relation_id)
+);
+CREATE TABLE IF NOT EXISTS publish_runs (
+    publish_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, publish_key TEXT NOT NULL,
+    run_id TEXT NOT NULL, status TEXT NOT NULL, checkpoint TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    last_error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
+    state_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS publish_checkpoints (
+    publish_id TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL,
+    finished_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (publish_id, stage)
+);
 """
 
 
@@ -304,6 +325,135 @@ class Store:
             conn.execute(
                 "UPDATE versions SET status=? WHERE batch_id=? AND metric=? AND version=?",
                 (status, batch_id, metric, version))
+
+    # ---------- M8 双源关系（按唯一键幂等写入，重试不新增重复关系） ----------
+    def replace_relations(self, batch_id: str, relations: list[dict]) -> None:
+        """整批先删后插，和一次运行同一事务语义；同一 batch 重写不留残边。"""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM relations WHERE batch_id=?", (batch_id,))
+            conn.executemany(
+                """INSERT INTO relations (batch_id,relation_id,kind,src,dst,status,
+                     source_version,line_no,known_src,known_dst,evidence_json,
+                     matched_ref,matched_appr)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [(batch_id, r["relation_id"], r["kind"], r["src"], r["dst"],
+                  r["status"], r["source_version"], r.get("line_no"),
+                  1 if r.get("known_src", True) else 0,
+                  1 if r.get("known_dst", True) else 0,
+                  _j(r.get("evidence", {})),
+                  r.get("matched_reference", ""), r.get("matched_approval", ""))
+                 for r in relations])
+
+    def upsert_relation(self, batch_id: str, rel: dict) -> None:
+        """单条幂等写：INSERT OR IGNORE 命中唯一键即跳过，重试不产生重复关系。"""
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO relations (batch_id,relation_id,kind,src,dst,
+                     status,source_version,line_no,known_src,known_dst,evidence_json,
+                     matched_ref,matched_appr)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (batch_id, rel["relation_id"], rel["kind"], rel["src"], rel["dst"],
+                 rel["status"], rel["source_version"], rel.get("line_no"),
+                 1 if rel.get("known_src", True) else 0,
+                 1 if rel.get("known_dst", True) else 0,
+                 _j(rel.get("evidence", {})),
+                 rel.get("matched_reference", ""), rel.get("matched_approval", "")))
+
+    def load_relations(self, batch_id: str, kind: str | None = None) -> list[dict]:
+        if kind:
+            rows = self._all(
+                "SELECT * FROM relations WHERE batch_id=? AND kind=? "
+                "ORDER BY kind, src, dst", (batch_id, kind))
+        else:
+            rows = self._all(
+                "SELECT * FROM relations WHERE batch_id=? ORDER BY kind, src, dst",
+                (batch_id,))
+        for r in rows:
+            r["evidence"] = json.loads(r.pop("evidence_json") or "{}")
+            r["known_src"] = bool(r["known_src"])
+            r["known_dst"] = bool(r["known_dst"])
+            # matched_ref 是布尔标记（审批关系侧），matched_appr 是状态串（引用关系侧）
+            r["matched_reference"] = r.pop("matched_ref") in (1, "1", True)
+            r["matched_approval"] = r.pop("matched_appr") or ""
+        return rows
+
+    def count_relations(self, batch_id: str) -> dict:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT kind, status, COUNT(*) AS n FROM relations "
+                "WHERE batch_id=? GROUP BY kind, status", (batch_id,)).fetchall()
+        return {(r["kind"], r["status"]): r["n"] for r in rows}
+
+    # ---------- M8 发布运行与校验点（断点续跑） ----------
+    def get_publish(self, publish_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM publish_runs WHERE publish_id=?", (publish_id,)).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["state"] = json.loads(data.pop("state_json") or "{}")
+        return data
+
+    def find_publish_by_key(self, publish_key: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM publish_runs WHERE publish_key=? "
+                "ORDER BY rowid DESC LIMIT 1", (publish_key,)).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["state"] = json.loads(data.pop("state_json") or "{}")
+        return data
+
+    def latest_publish(self) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM publish_runs ORDER BY rowid DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["state"] = json.loads(data.pop("state_json") or "{}")
+        return data
+
+    def list_publishes(self, limit: int = 30) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT publish_id,batch_id,publish_key,run_id,status,checkpoint,"
+                "created_at,updated_at,last_error,attempts FROM publish_runs "
+                "ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_publish(self, run: dict) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO publish_runs (publish_id,batch_id,publish_key,run_id,
+                     status,checkpoint,created_at,updated_at,last_error,attempts,
+                     state_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(publish_id) DO UPDATE SET status=excluded.status,
+                     checkpoint=excluded.checkpoint, updated_at=excluded.updated_at,
+                     last_error=excluded.last_error, attempts=excluded.attempts,
+                     state_json=excluded.state_json""",
+                (run["publish_id"], run["batch_id"], run["publish_key"], run["run_id"],
+                 run["status"], run.get("checkpoint", ""), run["created_at"],
+                 run["updated_at"], run.get("last_error", ""), run.get("attempts", 0),
+                 json.dumps(run.get("state", {}), ensure_ascii=False, default=str)))
+
+    def mark_checkpoint(self, publish_id: str, stage: str, status: str,
+                        finished_at: str, note: str = "") -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO publish_checkpoints (publish_id,stage,status,finished_at,note)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(publish_id, stage) DO UPDATE SET status=excluded.status,
+                     finished_at=excluded.finished_at, note=excluded.note""",
+                (publish_id, stage, status, finished_at, note))
+
+    def load_checkpoints(self, publish_id: str) -> list[dict]:
+        return self._all(
+            "SELECT * FROM publish_checkpoints WHERE publish_id=? ORDER BY rowid",
+            (publish_id,))
 
     def _all(self, sql: str, args: tuple) -> list[dict]:
         with self.connect() as conn:

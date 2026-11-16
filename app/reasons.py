@@ -163,6 +163,47 @@ REASONS = {
     "R_ISOLATED_SKIPPED": _r(
         "R_ISOLATED_SKIPPED", INFO, "retire",
         "孤立指标没有依赖边，不进迁移次序", "孤立指标可直接下线"),
+    # ---- M8 双源关系治理 ----
+    "G_REF_CYCLE_HIDDEN": _r(
+        "G_REF_CYCLE_HIDDEN", ERROR, "govern",
+        "真实引用成环，但审批依赖里缺边，环被未申报引用藏了起来",
+        "补齐 depends 申报并走审批，或按环路径拆掉一条真实引用"),
+    "G_APPROVAL_MISSING": _r(
+        "G_APPROVAL_MISSING", WARN, "govern",
+        "真实引用存在，但没有对应的有效审批依赖",
+        "补一条审批关系，下线许可不会因为真实引用自动放行"),
+    "G_APPROVAL_DISABLED": _r(
+        "G_APPROVAL_DISABLED", WARN, "govern",
+        "审批依赖已停用，但表达式仍在真实引用",
+        "停用的审批项仍保留为证据，需重新审批或改掉引用"),
+    "G_APPROVAL_UNUSED": _r(
+        "G_APPROVAL_UNUSED", INFO, "govern",
+        "审批关系有效，但表达式里没有对应的真实引用",
+        "审批关系继续决定下线许可，不会因真实引用缺失而自动删除"),
+    "G_APPROVAL_UNKNOWN": _r(
+        "G_APPROVAL_UNKNOWN", WARN, "govern",
+        "审批关系指向未注册指标，无法进入现网图",
+        "先注册被引用指标，或撤回这条审批"),
+    "G_APPROVAL_DUPLICATE": _r(
+        "G_APPROVAL_DUPLICATE", INFO, "govern",
+        "审批台账出现重复关系，只采信首条",
+        "重复行不新增关系，台账去重后重发即可"),
+    "R_DEP_NOT_APPROVED": _r(
+        "R_DEP_NOT_APPROVED", ERROR, "retire",
+        "仍有真实引用方，但缺少有效审批依赖，下线许可不成立",
+        "审批关系决定下线许可，先补审批再下线，不靠真实引用自动放行"),
+    "R_DEP_APPROVAL_DISABLED": _r(
+        "R_DEP_APPROVAL_DISABLED", ERROR, "retire",
+        "依赖方的审批项已停用，下线许可被收回",
+        "重新启用并审批该依赖，或先迁移依赖方"),
+    "B_PUBLISH_RESUMED": _r(
+        "B_PUBLISH_RESUMED", INFO, "govern",
+        "发布从上次校验点续跑，已完成阶段不重算",
+        "关系写入按唯一键去重，重试不新增重复关系"),
+    "B_PUBLISH_STAGE_FAILED": _r(
+        "B_PUBLISH_STAGE_FAILED", ERROR, "govern",
+        "发布在某校验点失败，已记录断点可续跑",
+        "修正输入后用同一 publish 键再次提交即可续跑"),
     "B_IDEMPOTENT_REPLAY": _r(
         "B_IDEMPOTENT_REPLAY", INFO, "ingest",
         "输入摘要命中已完成批次，复用结果", "同一输入重跑不新增行"),

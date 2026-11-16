@@ -21,7 +21,8 @@ UTC = dt.timezone.utc
 RULE_VERSION = "metricreg/1.3.0"
 DECIMAL_QUANT = Decimal("0.01")
 
-STAGES = ("ingest", "syntax", "diagnose", "graph", "version", "impact", "retire")
+STAGES = ("ingest", "syntax", "diagnose", "graph", "version", "impact", "retire",
+          "govern")
 STAGE_LABELS = {
     "ingest": "接入",
     "syntax": "语法",
@@ -30,6 +31,7 @@ STAGE_LABELS = {
     "version": "版本",
     "impact": "影响面",
     "retire": "下线",
+    "govern": "关系治理",
 }
 STAGE_FLOW = "接入 → 语法 → 诊断 → 依赖图 → 版本 → 影响面 → 下线"
 
@@ -95,6 +97,10 @@ DIAG_ORDER = (
     "R_VERSION_AMBIGUOUS", "R_REPLACEMENT_PARTIAL", "R_VERSION_NONE",
     "R_REPORT_DANGLING", "R_REQUEST_DUPLICATE", "R_RING_MERGED",
     "R_ISOLATED_SKIPPED",
+    "G_REF_CYCLE_HIDDEN", "G_APPROVAL_MISSING", "G_APPROVAL_DISABLED",
+    "G_APPROVAL_UNUSED", "G_APPROVAL_UNKNOWN", "G_APPROVAL_DUPLICATE",
+    "R_DEP_NOT_APPROVED", "R_DEP_APPROVAL_DISABLED",
+    "B_PUBLISH_RESUMED", "B_PUBLISH_STAGE_FAILED",
     "B_IDEMPOTENT_REPLAY", "E_BOM_STRIPPED",
     "E_CRLF_NORMALIZED", "E_CHARSET_FALLBACK",
 )
@@ -121,6 +127,44 @@ OP_PRECEDENCE = {"+": 1, "-": 1, "*": 2, "/": 2}
 
 # 版本区间：valid_to 留空视为未关闭，用哨兵日期参与比较
 OPEN_END = "9999-12-31"
+
+# ---- M8 双源关系治理 ----
+# 两类关系的来源：审批关系（决定下线许可）与真实引用（表达式 ref 实际血缘）
+REL_APPROVAL = "approval"
+REL_REFERENCE = "reference"
+RELATION_KIND_LABELS = {
+    REL_APPROVAL: "审批依赖",
+    REL_REFERENCE: "真实引用",
+}
+# 审批状态：active 有效（参与现网图与下线许可），disabled 已停用（只留证据）
+APPROVAL_ACTIVE = "active"
+APPROVAL_DISABLED = "disabled"
+APPROVAL_STATUS_LABELS = {
+    APPROVAL_ACTIVE: "有效",
+    APPROVAL_DISABLED: "已停用",
+}
+# 依赖页整版视图：live 现网图（有效审批）/ actual 真实引用（环检测）/ retire 下线判断
+VIEW_LIVE = "live"
+VIEW_ACTUAL = "actual"
+VIEW_RETIRE = "retire"
+VIEW_LABELS = {
+    VIEW_LIVE: "现网图 · 有效审批",
+    VIEW_ACTUAL: "真实引用 · 环检测",
+    VIEW_RETIRE: "下线判断 · 审批许可",
+}
+# 发布流水线的校验点（断点续跑按这些阶段记录 checkpoint）
+PUBLISH_STAGES = (
+    "decode", "diagnose", "reference", "approval",
+    "cycle", "persist",
+)
+PUBLISH_STAGE_LABELS = {
+    "decode": "采信",
+    "diagnose": "诊断",
+    "reference": "真实引用关系",
+    "approval": "审批关系对账",
+    "cycle": "双图环检测",
+    "persist": "证据落库",
+}
 
 
 @dataclass(frozen=True)

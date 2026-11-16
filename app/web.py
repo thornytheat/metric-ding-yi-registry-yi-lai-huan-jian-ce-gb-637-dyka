@@ -22,6 +22,7 @@ NAV = (
     ("/contract", "语法", "contract"),
     ("/diagnostics", "诊断", "diagnostics"),
     ("/graph", "依赖", "graph"),
+    ("/dependencies", "关系", "dependencies"),
     ("/versions", "版本", "versions"),
     ("/impact", "影响", "impact"),
     ("/retire", "下线", "retire"),

@@ -106,3 +106,19 @@
 ## 11 运行清单
 
 `run_id`（`MR-时间戳-4位`）、`batch_id`（批次键与 run_id 的摘要前 16 位）、`batch_key`（DSL 文本 + 两份 CSV 摘要 + 规则版本的 sha256 前 32 位）、每份输入的 sha256、规则版本、参数、起止时间、耗时、阶段计数、总账。
+
+## 12 双源关系（M8）
+
+| 关系 | 来源 | 状态 | 进现网图 | 用途 |
+|---|---|---|---|---|
+| 审批依赖 `approval` | `dependency_approvals.csv` 审批台账 | `active` / `disabled` | 仅 active | 决定下线许可、迁移次序 |
+| 真实引用 `reference` | 表达式 `ref()` 解析 | `observed`（观测到） | 否（单独成图） | 环检测、许可核对 |
+
+- **唯一键**：`(batch_id, relation_id)`，`relation_id = sha256(batch|kind|src|dst)[:16]`；续跑与重试按唯一键幂等，不新增重复关系。
+- **来源版本 `source_version`**：
+  - 审批关系取台账 `source_version` 列（如 `APV-2026-09/v2`），证据含审批人、审批日、台账行号、备注；
+  - 真实引用取 `规则版本/batch 摘要/L行号`，证据含 DSL 行号、表达式文本、是否在 `depends` 声明、输入摘要。
+- **对账标记**：每条真实引用标 `active / disabled / none` 的审批匹配；每条审批关系标是否存在对应真实引用。
+- **双图环**：审批图只连 active 且两端已注册的边；真实引用图连全部已注册真实边。真实图有、审批图无的环即「隐藏环」`G_REF_CYCLE_HIDDEN`。
+- **许可结论**：真实引用边 `licensed`（有 active 审批）/ `disabled`（审批停用 `R_DEP_APPROVAL_DISABLED`）/ `unapproved`（无有效审批 `R_DEP_NOT_APPROVED`）；真实引用永不自动放行。
+- **发布表**：`publish_runs`（状态 running/failed/done、当前 checkpoint、attempts、state JSON）与 `publish_checkpoints`（六校验点逐条记录），失败后按发布键续跑。
